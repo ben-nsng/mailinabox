@@ -85,14 +85,14 @@ def open_database(env, with_connection=False):
 	else:
 		return conn, conn.cursor()
 
-def get_mail_users(env):
+def get_mail_users(email, privs, env):
 	# Returns a flat, sorted list of all user accounts.
 	c = open_database(env)
 	c.execute('SELECT email FROM users')
 	users = [ row[0] for row in c.fetchall() ]
 	return utils.sort_email_addresses(users, env)
 
-def get_mail_users_ex(env, with_archived=False, with_slow_info=False):
+def get_mail_users_ex(email, privs, env, with_archived=False, with_slow_info=False):
 	# Returns a complex data structure of all user accounts, optionally
 	# including archived (status="inactive") accounts.
 	#
@@ -113,6 +113,7 @@ def get_mail_users_ex(env, with_archived=False, with_slow_info=False):
 
 	# Get users and their privileges.
 	users = []
+	admin_domain = get_domain(email)
 	active_accounts = set()
 	c = open_database(env)
 	c.execute('SELECT email, privileges FROM users')
@@ -151,6 +152,10 @@ def get_mail_users_ex(env, with_archived=False, with_slow_info=False):
 	domains = { }
 	for user in users:
 		domain = get_domain(user["email"])
+		if "domain" in privs:
+			if domain != admin_domain:
+				continue
+
 		if domain not in domains:
 			domains[domain] = {
 				"domain": domain,
@@ -167,10 +172,10 @@ def get_mail_users_ex(env, with_archived=False, with_slow_info=False):
 
 	return domains
 
-def get_admins(env):
+def get_admins(email, privs, env):
 	# Returns a set of users with admin privileges.
 	users = set()
-	for domain in get_mail_users_ex(env):
+	for domain in get_mail_users_ex("", ["admin"], env):
 		for user in domain["users"]:
 			if "admin" in user["privileges"]:
 				users.add(user["email"])
@@ -237,6 +242,7 @@ def get_mail_aliases_ex(env):
 def get_domain(emailaddr, as_unicode=True):
 	# Gets the domain part of an email address. Turns IDNA
 	# back to Unicode for display.
+	if emailaddr == "": return ""
 	ret = emailaddr.split('@', 1)[1]
 	if as_unicode: ret = ret.encode('ascii').decode('idna')
 	return ret
@@ -245,7 +251,7 @@ def get_mail_domains(env, filter_aliases=lambda alias : True):
 	# Returns the domain names (IDNA-encoded) of all of the email addresses
 	# configured on the system.
 	return set(
-		   [get_domain(addr, as_unicode=False) for addr in get_mail_users(env)]
+		   [get_domain(addr, as_unicode=False) for addr in get_mail_users("", ["admin"], env)]
 		 + [get_domain(source, as_unicode=False) for source, target in get_mail_aliases(env) if filter_aliases((source, target)) ]
 		 )
 
@@ -257,7 +263,7 @@ def add_mail_user(email, pw, privs, env):
 		return ("Invalid email address.", 400)
 	elif not validate_email(email, mode='user'):
 		return ("User account email addresses may only use the lowercase ASCII letters a-z, the digits 0-9, underscore (_), hyphen (-), and period (.).", 400)
-	elif is_dcv_address(email) and len(get_mail_users(env)) > 0:
+	elif is_dcv_address(email) and len(get_mail_users("", ["admin"], env)) > 0:
 		# Make domain control validation hijacking a little harder to mess up by preventing the usual
 		# addresses used for DCV from being user accounts. Except let it be the first account because
 		# during box setup the user won't know the rules.
@@ -527,7 +533,7 @@ def kick(env, mail_result=None):
 
 	# Ensure every required alias exists.
 
-	existing_users = get_mail_users(env)
+	existing_users = get_mail_users("", ["admin"], env)
 	existing_aliases = get_mail_aliases(env)
 	required_aliases = get_required_aliases(env)
 

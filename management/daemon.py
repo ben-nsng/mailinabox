@@ -4,7 +4,7 @@ import os, os.path, re, json
 
 from functools import wraps
 
-from flask import Flask, request, render_template, abort, Response, send_from_directory
+from flask import Flask, session, request, render_template, abort, Response, send_from_directory
 
 import auth, utils
 from mailconfig import get_mail_users, get_mail_users_ex, get_admins, add_mail_user, set_mail_password, remove_mail_user
@@ -44,7 +44,7 @@ def authorized_personnel_only(viewfunc):
 			error = str(e)
 
 		# Authorized to access an API view?
-		if "admin" in privs:
+		if "admin" or "domain" in privs:
 			# Call view func.	
 			return viewfunc(*args, **kwargs)
 		elif not error:
@@ -90,8 +90,8 @@ def json_response(data):
 def index():
 	# Render the control panel. This route does not require user authentication
 	# so it must be safe!
-	no_users_exist = (len(get_mail_users(env)) == 0)
-	no_admins_exist = (len(get_admins(env)) == 0)
+	no_users_exist = (len(get_mail_users("", [], env)) == 0)
+	no_admins_exist = (len(get_admins("", [], env)) == 0)
 	return render_template('index.html',
 		hostname=env['PRIMARY_HOSTNAME'],
 		storage_root=env['STORAGE_ROOT'],
@@ -117,8 +117,12 @@ def me():
 	}
 
 	# Is authorized as admin? Return an API key for future use.
-	if "admin" in privs:
+	if "admin" or "domain" in privs:
 		resp["api_key"] = auth_service.create_user_key(email, env)
+
+		# Store email & priv for future use
+		session["email"] = email
+		session["privs"] = privs
 
 	# Return.
 	return json_response(resp)
@@ -129,9 +133,9 @@ def me():
 @authorized_personnel_only
 def mail_users():
 	if request.args.get("format", "") == "json":
-		return json_response(get_mail_users_ex(env, with_archived=True, with_slow_info=True))
+		return json_response(get_mail_users_ex(session["email"], session["privs"], env, with_archived=True, with_slow_info=True))
 	else:
-		return "".join(x+"\n" for x in get_mail_users(env))
+		return "".join(x+"\n" for x in get_mail_users(session["email"], session["privs"], env))
 
 @app.route('/mail/users/add', methods=['POST'])
 @authorized_personnel_only
@@ -421,6 +425,9 @@ if __name__ == '__main__':
 
 	if not app.debug:
 		app.logger.addHandler(utils.create_syslog_handler())
+
+	# Please set the secret key for session, and keep it secret
+	app.secret_key = 'A0Zr98j/3yX R~XHH!jmN]LWX/,?RT'
 
 	# For testing on the command line, you can use `curl` like so:
 	#    curl --user $(</var/lib/mailinabox/api.key): http://localhost:10222/mail/users
